@@ -11,6 +11,8 @@ public:
     uint8_t readByte();
     int32_t readInt();
     float readFloat();
+    int64_t readLong();
+    bool readBoolean();
     std::string readString();
     std::vector<uint8_t> readImage();
     bool hasMore() const;

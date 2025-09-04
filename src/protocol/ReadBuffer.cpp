@@ -25,6 +25,27 @@ float ReadBuffer::readFloat() {
     return floatValue;
 }
 
+int64_t ReadBuffer::readLong() {
+    checkBounds(8);
+    int64_t value =
+        static_cast<int64_t>(data[position]) |
+        static_cast<int64_t>(data[position + 1]) << 8 |
+        static_cast<int64_t>(data[position + 2]) << 16 |
+        static_cast<int64_t>(data[position + 3]) << 24 |
+        static_cast<int64_t>(data[position + 4]) << 32 |
+        static_cast<int64_t>(data[position + 5]) << 40 |
+        static_cast<int64_t>(data[position + 6]) << 48 |
+        static_cast<int64_t>(data[position + 7]) << 56;
+    position += 8;
+    return value;
+}
+
+bool ReadBuffer::readBoolean() {
+    checkBounds(1);
+    return data[position++] != 0;
+}
+
+
 std::string ReadBuffer::readString() {
     int32_t len = readInt();
     checkBounds(len);

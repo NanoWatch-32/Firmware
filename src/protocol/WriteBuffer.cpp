@@ -22,6 +22,23 @@ void WriteBuffer::writeFloat(float value) {
     writeInt(static_cast<int32_t>(intValue));
 }
 
+void WriteBuffer::writeLong(int64_t value) {
+    ensureCapacity(8);
+    data[position++] = value & 0xFF;
+    data[position++] = value >> 8 & 0xFF;
+    data[position++] = value >> 16 & 0xFF;
+    data[position++] = value >> 24 & 0xFF;
+    data[position++] = value >> 32 & 0xFF;
+    data[position++] = value >> 40 & 0xFF;
+    data[position++] = value >> 48 & 0xFF;
+    data[position++] = value >> 56 & 0xFF;
+}
+
+void WriteBuffer::writeBoolean(bool value) {
+    ensureCapacity(1);
+    data[position++] = value ? 1 : 0;
+}
+
 void WriteBuffer::writeString(const std::string& str) {
     writeInt(static_cast<int32_t>(str.length()));
     ensureCapacity(str.length());
