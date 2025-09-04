@@ -1,7 +1,6 @@
 #include "BluetoothManager.h"
-#include <flatbuffers/flatbuffers.h>
-
-#include "helper.h"
+#include <ArduinoJson.h>
+#include <memory>
 
 BluetoothManager bluetooth_manager;
 
@@ -9,11 +8,8 @@ BluetoothManager::BluetoothManager() = default;
 
 void BluetoothManager::begin(const std::string &deviceName) {
     NimBLEDevice::init(deviceName);
-
     pServer = NimBLEDevice::createServer();
-
     customService = pServer->createService("0b60ab11-bc40-4d00-9ea4-5f2406872d9f");
-
     commandChar = customService->createCharacteristic(
         "cfa93afb-2c3d-4a76-a182-67e8b6d50b55",
         WRITE | NOTIFY
@@ -21,7 +17,6 @@ void BluetoothManager::begin(const std::string &deviceName) {
 
     commandCallbacks = new CommandCallbacks(this);
     commandChar->setCallbacks(commandCallbacks);
-
     customService->start();
 
     serverCallbacks = new ServerCallbacks(this);
@@ -42,15 +37,11 @@ void BluetoothManager::setPin(const std::string &pin) {
 }
 
 void BluetoothManager::startAdvertising() {
-    if (pAdvertising) {
-        pAdvertising->start();
-    }
+    if (pAdvertising) pAdvertising->start();
 }
 
 void BluetoothManager::stopAdvertising() {
-    if (pAdvertising) {
-        pAdvertising->stop();
-    }
+    if (pAdvertising) pAdvertising->stop();
 }
 
 void BluetoothManager::onConnect(std::function<void(NimBLEServer *)> callback) {
@@ -69,67 +60,121 @@ bool BluetoothManager::isAdvertising() const {
     return pAdvertising && pAdvertising->isAdvertising();
 }
 
-void BluetoothManager::listen(int payloadTag, std::function<void(const nano_CommandPacket &)> callback) {
-    listeners[payloadTag] = callback;
-}
-
-void BluetoothManager::send(const nano_CommandPacket &packet) const {
+void BluetoothManager::send(const Packet &packet) const {
     if (!isConnected()) {
         Serial.println("Cannot send: Not connected.");
         return;
     }
 
-    uint8_t buffer[256];
-    pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+    // Serialize packet to JSON (without type)
+    StaticJsonDocument<64> doc;
+    packet.serialize(doc);
 
-    if (!pb_encode(&stream, nano_CommandPacket_fields, &packet)) {
-        Serial.print("Encoding failed: ");
-        Serial.println(PB_GET_ERROR(&stream));
-        return;
+    String output;
+    serializeJson(doc, output);
+
+    const int maxChunkSize = 18; // 20 bytes MTU - 2 bytes for header
+    int totalLength = output.length();
+    int numFragments = (totalLength + maxChunkSize - 1) / maxChunkSize;
+
+    uint8_t header[2];
+    header[0] = static_cast<uint8_t>(packet.getType());
+
+    for (int i = 0; i < numFragments; i++) {
+        header[1] = (i << 4) | numFragments;
+
+        String fragment;
+        fragment += (char) header[0];
+        fragment += (char) header[1];
+
+        int start = i * maxChunkSize;
+        int end = min(start + maxChunkSize, totalLength);
+        fragment += output.substring(start, end);
+
+        commandChar->setValue(fragment.c_str());
+        commandChar->notify();
+        delay(10);
     }
 
     Serial.println("Sent packet.");
-
-    commandChar->setValue(buffer, stream.bytes_written);
-    commandChar->notify();
 }
 
+void BluetoothManager::listen(PacketType type, std::function<void(const Packet &)> callback) {
+    listeners[type] = callback;
+}
+
+
 void BluetoothManager::ServerCallbacks::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
-    if (manager->connectCallback) {
-        manager->connectCallback(pServer);
-    }
+    if (manager->connectCallback) manager->connectCallback(pServer);
 }
 
 void BluetoothManager::ServerCallbacks::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) {
-    if (manager->disconnectCallback) {
-        manager->disconnectCallback(pServer);
-    }
+    if (manager->disconnectCallback) manager->disconnectCallback(pServer);
     manager->startAdvertising();
 }
 
+
 void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) {
     std::string value = pCharacteristic->getValue();
-    const uint8_t *data = reinterpret_cast<const uint8_t *>(value.data());
-    size_t len = value.size();
+    if (value.length() < 2) return;
 
-    if (len == 0) return;
+    uint8_t packetTypeByte = value[0];
+    uint8_t fragHeader = value[1];
+    uint8_t fragmentIndex = (fragHeader >> 4) & 0x0F;
+    uint8_t totalFragments = fragHeader & 0x0F;
 
-    nano_CommandPacket packet = nano_CommandPacket_init_zero;
-    pb_istream_t stream = pb_istream_from_buffer(data, len);
+    std::string payload = value.substr(2);
 
-    bool status = pb_decode(&stream, nano_CommandPacket_fields, &packet);
-    if (!status) {
-        Serial.println("Failed to decode command packet");
-        return;
+    if (fragmentIndex == 0) {
+        manager->currentPacketType = static_cast<PacketType>(packetTypeByte);
+        manager->fragmentBuffer = payload.c_str();
+        manager->expectedFragments = totalFragments;
+        manager->receivedFragments = 1;
+    } else {
+        if (fragmentIndex == manager->receivedFragments) {
+            manager->fragmentBuffer += payload.c_str();
+            manager->receivedFragments++;
+        } else {
+            manager->fragmentBuffer = "";
+            manager->expectedFragments = 0;
+            manager->receivedFragments = 0;
+            manager->currentPacketType = static_cast<PacketType>(0);
+            return;
+        }
     }
 
-    Serial.print("Received BLE packet with payload tag: ");
-    Serial.println(packet.which_payload);
+    if (manager->receivedFragments == manager->expectedFragments) {
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, manager->fragmentBuffer);
 
-    auto it = manager->listeners.find(packet.which_payload);
-    if (it != manager->listeners.end()) {
-        it->second(packet);
-    } else {
-        Serial.println("No listener registered for this payload tag");
+        if (error) {
+            Serial.print("JSON deserialization failed: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        std::unique_ptr<Packet> packet(createPacketFromType(manager->currentPacketType));
+        if (!packet) {
+            Serial.print("Unknown packet type: ");
+            Serial.println(static_cast<uint8_t>(manager->currentPacketType));
+            return;
+        }
+
+        packet->deserialize(doc);
+
+        Serial.print("Received packet with type: ");
+        Serial.println(static_cast<uint8_t>(packet->getType()));
+
+        auto it = manager->listeners.find(packet->getType());
+        if (it != manager->listeners.end()) {
+            it->second(*packet);
+        } else {
+            Serial.println("No listener registered for this packet type");
+        }
+
+        manager->fragmentBuffer = "";
+        manager->expectedFragments = 0;
+        manager->receivedFragments = 0;
+        manager->currentPacketType = static_cast<PacketType>(0);
     }
 }

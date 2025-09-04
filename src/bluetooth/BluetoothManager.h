@@ -2,10 +2,9 @@
 #include <NimBLEDevice.h>
 #include <functional>
 #include <string>
-#include "proto_gen/protocol.pb.h"
 #include <map>
-#include "pb_encode.h"
-#include "pb_decode.h"
+#include <memory>
+#include "packets.h"
 
 class BluetoothManager {
 public:
@@ -23,9 +22,8 @@ public:
     bool isConnected() const;
     bool isAdvertising() const;
 
-    void send(const nano_CommandPacket &packet) const;
-
-    void listen(int payloadTag, std::function<void(const nano_CommandPacket &)> callback);
+    void send(const Packet& packet) const;
+    void listen(PacketType type, std::function<void(const Packet&)> callback);
 
 private:
     NimBLEServer *pServer = nullptr;
@@ -35,6 +33,12 @@ private:
 
     std::function<void(NimBLEServer*)> connectCallback = nullptr;
     std::function<void(NimBLEServer*)> disconnectCallback = nullptr;
+
+    // Fragmentation state
+    mutable String fragmentBuffer;
+    mutable uint8_t expectedFragments = 0;
+    mutable uint8_t receivedFragments = 0;
+    mutable PacketType currentPacketType = static_cast<PacketType>(0);
 
     class ServerCallbacks : public NimBLEServerCallbacks {
     public:
@@ -56,7 +60,7 @@ private:
     ServerCallbacks *serverCallbacks = nullptr;
     CommandCallbacks *commandCallbacks = nullptr;
 
-    std::map<int, std::function<void(const nano_CommandPacket &)>> listeners;
+    std::map<PacketType, std::function<void(const Packet&)>> listeners;
 };
 
 extern BluetoothManager bluetooth_manager;

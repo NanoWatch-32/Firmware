@@ -64,12 +64,7 @@ void MediaControlScreen::setup() {
 }
 
 void MediaControlScreen::sendAction(uint8_t action) {
-    nano_CommandPacket packet = nano_CommandPacket_init_zero;
-    packet.type = nano_PacketType_MEDIA_COMMAND;
-    packet.which_payload = nano_CommandPacket_mediaCommand_tag;
-
-    packet.payload.mediaCommand.action = static_cast<nano_MediaAction>(action);
-
+    MediaCommandPacket packet(action);
     bluetooth_manager.send(packet);
 }
 
