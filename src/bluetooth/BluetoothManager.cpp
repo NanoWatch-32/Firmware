@@ -1,5 +1,5 @@
 #include "BluetoothManager.h"
-#include <ArduinoJson.h>
+#include <vector>
 #include <memory>
 
 BluetoothManager bluetooth_manager;
@@ -7,26 +7,40 @@ BluetoothManager bluetooth_manager;
 BluetoothManager::BluetoothManager() = default;
 
 void BluetoothManager::begin(const std::string &deviceName) {
+    Serial.println("Initializing BLE...");
+
     NimBLEDevice::init(deviceName);
+    Serial.println("BLE device initialized");
+
     pServer = NimBLEDevice::createServer();
+    Serial.println("BLE server created");
+
     customService = pServer->createService("0b60ab11-bc40-4d00-9ea4-5f2406872d9f");
+    Serial.println("Service created");
+
     commandChar = customService->createCharacteristic(
         "cfa93afb-2c3d-4a76-a182-67e8b6d50b55",
-        WRITE | NOTIFY
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
     );
+    Serial.println("Characteristic created");
 
     commandCallbacks = new CommandCallbacks(this);
     commandChar->setCallbacks(commandCallbacks);
+    Serial.println("Callbacks set");
+
     customService->start();
+    Serial.println("Service started");
 
     serverCallbacks = new ServerCallbacks(this);
     pServer->setCallbacks(serverCallbacks);
+    Serial.println("Server callbacks set");
 
     pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->setName(deviceName);
     pAdvertising->setAppearance(0x00C0);
     pAdvertising->addServiceUUID(customService->getUUID());
     pAdvertising->start();
+    Serial.println("Advertising started");
 }
 
 void BluetoothManager::setPin(const std::string &pin) {
@@ -66,16 +80,18 @@ void BluetoothManager::send(const Packet &packet) const {
         return;
     }
 
-    // Serialize packet to JSON (without type)
-    StaticJsonDocument<64> doc;
-    packet.serialize(doc);
-
-    String output;
-    serializeJson(doc, output);
+    WriteBuffer buffer;
+    packet.encode(buffer);
+    std::vector<uint8_t> encodedData = buffer.getData();
 
     const int maxChunkSize = 18; // 20 bytes MTU - 2 bytes for header
-    int totalLength = output.length();
+    int totalLength = encodedData.size();
     int numFragments = (totalLength + maxChunkSize - 1) / maxChunkSize;
+
+    if (numFragments > 15) {
+        Serial.println("Packet too large for fragmentation");
+        return;
+    }
 
     uint8_t header[2];
     header[0] = static_cast<uint8_t>(packet.getType());
@@ -83,15 +99,15 @@ void BluetoothManager::send(const Packet &packet) const {
     for (int i = 0; i < numFragments; i++) {
         header[1] = (i << 4) | numFragments;
 
-        String fragment;
-        fragment += (char) header[0];
-        fragment += (char) header[1];
+        std::vector<uint8_t> fragment;
+        fragment.push_back(header[0]);
+        fragment.push_back(header[1]);
 
         int start = i * maxChunkSize;
-        int end = min(start + maxChunkSize, totalLength);
-        fragment += output.substring(start, end);
+        int end = std::min(start + maxChunkSize, totalLength);
+        fragment.insert(fragment.end(), encodedData.begin() + start, encodedData.begin() + end);
 
-        commandChar->setValue(fragment.c_str());
+        commandChar->setValue(fragment.data(), fragment.size());
         commandChar->notify();
         delay(10);
     }
@@ -103,39 +119,49 @@ void BluetoothManager::listen(PacketType type, std::function<void(const Packet &
     listeners[type] = callback;
 }
 
-
 void BluetoothManager::ServerCallbacks::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
-    if (manager->connectCallback) manager->connectCallback(pServer);
+    Serial.println("Client connected");
+    if (manager->connectCallback) {
+        manager->connectCallback(pServer);
+    }
 }
 
 void BluetoothManager::ServerCallbacks::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) {
-    if (manager->disconnectCallback) manager->disconnectCallback(pServer);
+    Serial.print("Client disconnected, reason: ");
+    Serial.println(reason);
+    if (manager->disconnectCallback) {
+        manager->disconnectCallback(pServer);
+    }
     manager->startAdvertising();
+    Serial.println("Restarted advertising");
 }
-
 
 void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) {
     std::string value = pCharacteristic->getValue();
-    if (value.length() < 2) return;
+    if (value.length() < 2) return; // Need at least 2 bytes for header
 
     uint8_t packetTypeByte = value[0];
     uint8_t fragHeader = value[1];
     uint8_t fragmentIndex = (fragHeader >> 4) & 0x0F;
     uint8_t totalFragments = fragHeader & 0x0F;
 
-    std::string payload = value.substr(2);
+    const uint8_t* payload = reinterpret_cast<const uint8_t*>(value.data()) + 2;
+    size_t payloadLength = value.length() - 2;
 
     if (fragmentIndex == 0) {
         manager->currentPacketType = static_cast<PacketType>(packetTypeByte);
-        manager->fragmentBuffer = payload.c_str();
+        manager->fragmentBuffer.clear();
+        manager->fragmentBuffer.insert(manager->fragmentBuffer.end(), payload, payload + payloadLength);
         manager->expectedFragments = totalFragments;
         manager->receivedFragments = 1;
     } else {
+        // subsequent fragments
         if (fragmentIndex == manager->receivedFragments) {
-            manager->fragmentBuffer += payload.c_str();
+            manager->fragmentBuffer.insert(manager->fragmentBuffer.end(), payload, payload + payloadLength);
             manager->receivedFragments++;
         } else {
-            manager->fragmentBuffer = "";
+            // out of order fragment; reset
+            manager->fragmentBuffer.clear();
             manager->expectedFragments = 0;
             manager->receivedFragments = 0;
             manager->currentPacketType = static_cast<PacketType>(0);
@@ -143,16 +169,8 @@ void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacte
         }
     }
 
+    // all fragments present?
     if (manager->receivedFragments == manager->expectedFragments) {
-        DynamicJsonDocument doc(256);
-        DeserializationError error = deserializeJson(doc, manager->fragmentBuffer);
-
-        if (error) {
-            Serial.print("JSON deserialization failed: ");
-            Serial.println(error.c_str());
-            return;
-        }
-
         std::unique_ptr<Packet> packet(createPacketFromType(manager->currentPacketType));
         if (!packet) {
             Serial.print("Unknown packet type: ");
@@ -160,7 +178,8 @@ void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacte
             return;
         }
 
-        packet->deserialize(doc);
+        ReadBuffer buffer(manager->fragmentBuffer.data(), manager->fragmentBuffer.size());
+        packet->decode(buffer);
 
         Serial.print("Received packet with type: ");
         Serial.println(static_cast<uint8_t>(packet->getType()));
@@ -172,7 +191,8 @@ void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacte
             Serial.println("No listener registered for this packet type");
         }
 
-        manager->fragmentBuffer = "";
+        // reset fragmentation state
+        manager->fragmentBuffer.clear();
         manager->expectedFragments = 0;
         manager->receivedFragments = 0;
         manager->currentPacketType = static_cast<PacketType>(0);

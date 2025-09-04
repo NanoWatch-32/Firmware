@@ -1,10 +1,16 @@
 #pragma once
+
 #include <NimBLEDevice.h>
 #include <functional>
 #include <string>
 #include <map>
-#include <memory>
-#include "packets.h"
+#include <vector>
+#include "protocol/PacketType.h"
+#include "protocol/Packet.h"
+#include "protocol/WriteBuffer.h"
+#include "protocol/ReadBuffer.h"
+
+class Packet;
 
 class BluetoothManager {
 public:
@@ -35,7 +41,7 @@ private:
     std::function<void(NimBLEServer*)> disconnectCallback = nullptr;
 
     // Fragmentation state
-    mutable String fragmentBuffer;
+    mutable std::vector<uint8_t> fragmentBuffer;
     mutable uint8_t expectedFragments = 0;
     mutable uint8_t receivedFragments = 0;
     mutable PacketType currentPacketType = static_cast<PacketType>(0);
