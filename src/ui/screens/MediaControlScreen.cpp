@@ -5,22 +5,6 @@
 #include "protocol/packet/MediaCommandPacket.h"
 #include "protocol/packet/MediaInfoPacket.h"
 
-void MediaControlScreen::init() {
-    bluetooth_manager.listen(PacketType::MEDIA_INFO, [this](const Packet &packet) {
-        const MediaInfoPacket *mediaPacket = dynamic_cast<const MediaInfoPacket *>(&packet);
-
-        if (mediaPacket) {
-            updateMetadata(
-                mediaPacket->title,
-                mediaPacket->artist,
-                mediaPacket->album,
-                mediaPacket->duration,
-                mediaPacket->position,
-                mediaPacket->isPlaying
-            );
-        }
-    });
-}
 
 void MediaControlScreen::setup() {
     screenObj = lv_obj_create(nullptr);
@@ -97,6 +81,15 @@ void MediaControlScreen::setup() {
     lv_obj_add_event_cb(prevBtn, [](lv_event_t *e) {
         static_cast<MediaControlScreen *>(lv_event_get_user_data(e))->sendAction(0x04);
     }, LV_EVENT_CLICKED, this);
+
+    bluetooth_manager.listen(PacketType::MEDIA_INFO, [this](const Packet &packet) {
+        const MediaInfoPacket *mediaPacket = dynamic_cast<const MediaInfoPacket *>(&packet);
+
+        if (mediaPacket) {
+            updateMetadata(mediaPacket->title, mediaPacket->artist, mediaPacket->album, mediaPacket->duration,
+                           mediaPacket->position, mediaPacket->isPlaying);
+        }
+    });
 }
 
 void MediaControlScreen::onProgressTimer() {
@@ -117,9 +110,20 @@ void MediaControlScreen::onProgressTimer() {
 void MediaControlScreen::updateMetadata(const std::string &title, const std::string &artist,
                                         const std::string &album, uint32_t duration,
                                         uint32_t position, bool isPlaying) {
-    lv_label_set_text_fmt(titleLabel, "Title: %s", title.c_str());
-    lv_label_set_text_fmt(artistLabel, "Artist: %s", artist.c_str());
-    lv_label_set_text_fmt(albumLabel, "Album: %s", album.c_str());
+    const char *titleStr = title.empty() ? "Unknown" : title.c_str();
+    const char *artistStr = artist.empty() ? "Unknown" : artist.c_str();
+    const char *albumStr = album.empty() ? "Unknown" : album.c_str();
+
+    char buf[128];
+
+    snprintf(buf, sizeof(buf), "Title: %s", titleStr);
+    lv_label_set_text(titleLabel, buf);
+
+    snprintf(buf, sizeof(buf), "Artist: %s", artistStr);
+    lv_label_set_text(artistLabel, buf);
+
+    snprintf(buf, sizeof(buf), "Album: %s", albumStr);
+    lv_label_set_text(albumLabel, buf);
 
     totalDuration = duration;
     currentPosition = position;

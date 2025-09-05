@@ -6,7 +6,6 @@
 
 class MediaControlScreen : public Screen {
 public:
-    void init() override;
     void setup() override;
 
     void onProgressTimer();
