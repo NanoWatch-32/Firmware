@@ -2,6 +2,7 @@
 #include "PacketType.h"
 #include "packet/MediaCommandPacket.h"
 #include "packet/MediaInfoPacket.h"
+#include "packet/TimeSyncPacket.h"
 
 Packet *createPacketFromType(PacketType type) {
     switch (type) {
@@ -9,6 +10,8 @@ Packet *createPacketFromType(PacketType type) {
             return new MediaCommandPacket();
         case PacketType::MEDIA_INFO:
             return new MediaInfoPacket();
+        case PacketType::TIME_SYNC:
+            return new TimeSyncPacket();
         default:
             return nullptr;
     }

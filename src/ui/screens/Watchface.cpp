@@ -4,7 +4,9 @@
 #include <cstring>
 #include <ctime>
 
+#include "bluetooth/BluetoothManager.h"
 #include "config/Theme.h"
+#include "protocol/packet/TimeSyncPacket.h"
 
 static lv_obj_t *battery_arc;
 static lv_obj_t *battery_percent_label;
@@ -46,6 +48,26 @@ static void timer_cb(lv_timer_t *timer) {
     lv_bar_set_value(progress_bar, progress, LV_ANIM_ON);
 
     update_battery_arc_and_text();
+}
+
+void Watchface::init() {
+    bluetooth_manager.listen(PacketType::TIME_SYNC, [this](const Packet &packet) {
+        const TimeSyncPacket *time_sync_packet = dynamic_cast<const TimeSyncPacket *>(&packet);
+
+        if (time_sync_packet) {
+            const int64_t timestamp_ms = time_sync_packet->timestamp;
+
+            const time_t sec = timestamp_ms / 1000;
+            const suseconds_t usec = static_cast<suseconds_t>(timestamp_ms % 1000 * 1000);
+
+            const timeval now = {
+                .tv_sec = sec,
+                .tv_usec = usec
+            };
+
+            settimeofday(&now, nullptr);
+        }
+    });
 }
 
 void Watchface::setup() {
