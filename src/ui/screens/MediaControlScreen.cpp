@@ -3,6 +3,24 @@
 #include "config/Theme.h"
 #include "bluetooth/BluetoothManager.h"
 #include "protocol/packet/MediaCommandPacket.h"
+#include "protocol/packet/MediaInfoPacket.h"
+
+void MediaControlScreen::init() {
+    bluetooth_manager.listen(PacketType::MEDIA_INFO, [this](const Packet &packet) {
+        const MediaInfoPacket *mediaPacket = dynamic_cast<const MediaInfoPacket *>(&packet);
+
+        if (mediaPacket) {
+            updateMetadata(
+                mediaPacket->title,
+                mediaPacket->artist,
+                mediaPacket->album,
+                mediaPacket->duration,
+                mediaPacket->position,
+                mediaPacket->isPlaying
+            );
+        }
+    });
+}
 
 void MediaControlScreen::setup() {
     screenObj = lv_obj_create(nullptr);
@@ -24,14 +42,12 @@ void MediaControlScreen::setup() {
     lv_obj_set_style_text_font(albumLabel, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(albumLabel, LV_ALIGN_TOP_MID, 0, 55);
 
-    // Progress bar
     progressBar = lv_bar_create(screenObj);
     lv_obj_set_size(progressBar, 200, 15);
     lv_obj_align(progressBar, LV_ALIGN_TOP_MID, 0, 80);
     lv_bar_set_range(progressBar, 0, 1000);
     lv_bar_set_value(progressBar, 0, LV_ANIM_OFF);
 
-    // Position and duration labels
     positionLabel = lv_label_create(screenObj);
     lv_label_set_text(positionLabel, "0:00");
     lv_obj_set_style_text_font(positionLabel, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -42,7 +58,6 @@ void MediaControlScreen::setup() {
     lv_obj_set_style_text_font(durationLabel, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(durationLabel, LV_ALIGN_TOP_MID, 90, 100);
 
-    // Play Button
     playBtn = lv_btn_create(screenObj);
     lv_obj_set_size(playBtn, 60, 40);
     lv_obj_align(playBtn, LV_ALIGN_CENTER, -80, 40);
@@ -53,7 +68,6 @@ void MediaControlScreen::setup() {
         static_cast<MediaControlScreen *>(lv_event_get_user_data(e))->sendAction(0x01);
     }, LV_EVENT_CLICKED, this);
 
-    // Pause Button
     pauseBtn = lv_btn_create(screenObj);
     lv_obj_set_size(pauseBtn, 60, 40);
     lv_obj_align(pauseBtn, LV_ALIGN_CENTER, 0, 40);
@@ -64,7 +78,6 @@ void MediaControlScreen::setup() {
         static_cast<MediaControlScreen *>(lv_event_get_user_data(e))->sendAction(0x02);
     }, LV_EVENT_CLICKED, this);
 
-    // Next Button
     nextBtn = lv_btn_create(screenObj);
     lv_obj_set_size(nextBtn, 60, 40);
     lv_obj_align(nextBtn, LV_ALIGN_CENTER, 80, 40);
@@ -75,7 +88,6 @@ void MediaControlScreen::setup() {
         static_cast<MediaControlScreen *>(lv_event_get_user_data(e))->sendAction(0x03);
     }, LV_EVENT_CLICKED, this);
 
-    // Previous Button
     prevBtn = lv_btn_create(screenObj);
     lv_obj_set_size(prevBtn, 60, 40);
     lv_obj_align(prevBtn, LV_ALIGN_CENTER, 0, 90);
@@ -85,35 +97,53 @@ void MediaControlScreen::setup() {
     lv_obj_add_event_cb(prevBtn, [](lv_event_t *e) {
         static_cast<MediaControlScreen *>(lv_event_get_user_data(e))->sendAction(0x04);
     }, LV_EVENT_CLICKED, this);
-
-    /*
-    bluetooth_manager.listen(PacketType::MEDIA_METADATA, [this](const Packet& packet) {
-        Serial.println("GOt packet!");
-        const MediaMetadataPacket& metadata = static_cast<const MediaMetadataPacket&>(packet);
-        updateMetadata(metadata.title, metadata.artist, metadata.album,
-                      metadata.duration, metadata.position, metadata.isPlaying);
-    });
-    */
 }
 
-void MediaControlScreen::updateMetadata(const String& title, const String& artist,
-                                       const String& album, uint32_t duration,
-                                       uint32_t position, bool isPlaying) {
-    // Update labels
+void MediaControlScreen::onProgressTimer() {
+    uint32_t now = millis();
+    uint32_t delta = now - lastUpdateMillis;
+    lastUpdateMillis = now;
+
+    currentPosition += delta;
+
+    if (currentPosition > totalDuration) {
+        currentPosition = totalDuration;
+    }
+
+    updateProgressDisplay();
+}
+
+
+void MediaControlScreen::updateMetadata(const std::string &title, const std::string &artist,
+                                        const std::string &album, uint32_t duration,
+                                        uint32_t position, bool isPlaying) {
     lv_label_set_text_fmt(titleLabel, "Title: %s", title.c_str());
     lv_label_set_text_fmt(artistLabel, "Artist: %s", artist.c_str());
     lv_label_set_text_fmt(albumLabel, "Album: %s", album.c_str());
 
-    // Update progress
     totalDuration = duration;
     currentPosition = position;
     playing = isPlaying;
 
     updateProgressDisplay();
+
+    if (playing) {
+        if (!progressTimer) {
+            lastUpdateMillis = millis();
+            progressTimer = lv_timer_create([](lv_timer_t *t) {
+                static_cast<MediaControlScreen *>(t->user_data)->onProgressTimer();
+            }, 1000 / 30, this);
+        }
+    } else {
+        if (progressTimer) {
+            lv_timer_del(progressTimer);
+            progressTimer = nullptr;
+        }
+    }
 }
 
-void MediaControlScreen::updateProgressDisplay() {
-    // Update progress bar
+
+void MediaControlScreen::updateProgressDisplay() const {
     if (totalDuration > 0) {
         uint16_t progress = (currentPosition * 1000) / totalDuration;
         lv_bar_set_value(progressBar, progress, LV_ANIM_ON);
@@ -121,19 +151,18 @@ void MediaControlScreen::updateProgressDisplay() {
         lv_bar_set_value(progressBar, 0, LV_ANIM_OFF);
     }
 
-    // Update time labels
     lv_label_set_text(positionLabel, formatTime(currentPosition).c_str());
     lv_label_set_text(durationLabel, formatTime(totalDuration).c_str());
 }
 
-String MediaControlScreen::formatTime(uint32_t milliseconds) {
+std::string MediaControlScreen::formatTime(uint32_t milliseconds) {
     uint32_t seconds = milliseconds / 1000;
     uint32_t minutes = seconds / 60;
     seconds = seconds % 60;
 
     char buffer[10];
     snprintf(buffer, sizeof(buffer), "%d:%02d", minutes, seconds);
-    return String(buffer);
+    return std::string(buffer);
 }
 
 void MediaControlScreen::sendAction(uint8_t action) {
@@ -142,9 +171,10 @@ void MediaControlScreen::sendAction(uint8_t action) {
 }
 
 void MediaControlScreen::update() {
-    // If we want to update progress in real-time, we could do it here
-    // But for now, we'll rely on metadata updates from the phone
 }
 
-void MediaControlScreen::onSwipeLeft() {}
-void MediaControlScreen::onSwipeRight() {}
+void MediaControlScreen::onSwipeLeft() {
+}
+
+void MediaControlScreen::onSwipeRight() {
+}

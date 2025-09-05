@@ -151,8 +151,6 @@ void setup() {
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, lvTouchRead);
 
-    bluetooth_manager.begin("NanoWatch");
-
     screenManager.addScreen(new Watchface());
     screenManager.addScreen(new SettingsScreen());
     screenManager.addScreen(new BluetoothScreen());
@@ -163,6 +161,8 @@ void setup() {
     digitalWrite(TFT_BACKLIGHT_PIN, HIGH);
     lastInteractionTime = millis();
     lastMemoryCheckTime = millis();
+
+    bluetooth_manager.begin("NanoWatch");
 
     Serial.println("Setup complete!");
 }

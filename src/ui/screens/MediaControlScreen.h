@@ -1,21 +1,26 @@
 #pragma once
-#include <WString.h>
 
+#include "lvgl_private.h"
+#include <string>
 #include "ui/Screen.h"
 
 class MediaControlScreen : public Screen {
 public:
+    void init() override;
     void setup() override;
+
+    void onProgressTimer();
+
     void update() override;
     void onSwipeLeft() override;
     void onSwipeRight() override;
 
-    void updateMetadata(const String& title, const String& artist,
-                   const String& album, uint32_t duration,
+    void updateMetadata(const std::string& title, const std::string& artist,
+                   const std::string& album, uint32_t duration,
                    uint32_t position, bool isPlaying);
 
 private:
-    void sendAction(uint8_t action);
+    static void sendAction(uint8_t action);
 
     lv_obj_t* titleLabel;
     lv_obj_t* artistLabel;
@@ -32,6 +37,10 @@ private:
     uint32_t currentPosition = 0;
     bool playing = false;
 
-    void updateProgressDisplay();
-    String formatTime(uint32_t milliseconds);
+    lv_timer_t* progressTimer = nullptr;
+    uint32_t lastUpdateMillis = 0;
+
+    void updateProgressDisplay() const;
+
+    static std::string formatTime(uint32_t milliseconds);
 };

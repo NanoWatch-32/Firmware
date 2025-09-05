@@ -6,6 +6,7 @@ public:
     virtual ~Screen() = default;
 
     virtual void setup() = 0;
+    virtual void init() {}
 
     virtual void update() = 0;
 

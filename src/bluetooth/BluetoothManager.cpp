@@ -84,7 +84,7 @@ void BluetoothManager::send(const Packet &packet) const {
     packet.encode(buffer);
     std::vector<uint8_t> encodedData = buffer.getData();
 
-    const int maxChunkSize = 18; // 20 bytes MTU - 2 bytes for header
+    const int maxChunkSize = 128 - 2; // 2 bytes for header
     int totalLength = encodedData.size();
     int numFragments = (totalLength + maxChunkSize - 1) / maxChunkSize;
 
@@ -121,6 +121,7 @@ void BluetoothManager::listen(PacketType type, std::function<void(const Packet &
 
 void BluetoothManager::ServerCallbacks::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
     Serial.println("Client connected");
+    NimBLEDevice::setMTU(128);
     if (manager->connectCallback) {
         manager->connectCallback(pServer);
     }
@@ -144,6 +145,13 @@ void BluetoothManager::CommandCallbacks::onWrite(NimBLECharacteristic *pCharacte
     uint8_t fragHeader = value[1];
     uint8_t fragmentIndex = (fragHeader >> 4) & 0x0F;
     uint8_t totalFragments = fragHeader & 0x0F;
+
+    Serial.print("Received fragment ");
+    Serial.print(fragmentIndex);
+    Serial.print(" of ");
+    Serial.print(totalFragments);
+    Serial.print(" for packet type ");
+    Serial.println(packetTypeByte);
 
     const uint8_t* payload = reinterpret_cast<const uint8_t*>(value.data()) + 2;
     size_t payloadLength = value.length() - 2;

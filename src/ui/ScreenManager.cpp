@@ -50,6 +50,7 @@ static void animateScreenTransition(lv_obj_t *newScreen, const lv_dir_t directio
 
 void ScreenManager::addScreen(Screen *screen) {
     screens.push_back(screen);
+    screen->init();
 }
 
 void ScreenManager::setCurrentScreen(const size_t index) {
